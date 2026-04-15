@@ -1,0 +1,5 @@
+"feat(dashboard): add real Mexicali energy consumption data"
+
+Agregados datos reales de consumo eléctrico de Mexicali (verano 2025).
+El dashboard ahora carga un JSON con consumo por hora, temperatura y demanda pico.
+Primer paso real para conectar con datos de CFE/CENACE.

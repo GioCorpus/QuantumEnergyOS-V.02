@@ -1,0 +1,12 @@
+use crate::inflation::InflationPhase;
+use crate::dark_matter::DarkMatterSimulator;
+
+pub fn big_bang() -> Result<Universe, BorrowError> {
+    let mut cosmos = Universe::new("13.8e9");
+    cosmos.add_dependency(InflationPhase::init());
+    cosmos.add_dependency(DarkMatterSimulator::with_lifetime("eternal"));
+    
+    // Ownership: el vacío cuántico no se presta
+    cosmos.compile_release()?;
+    Ok(cosmos)
+}

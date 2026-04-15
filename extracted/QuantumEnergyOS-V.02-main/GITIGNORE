@@ -1,0 +1,79 @@
+# ──────────────────────────────────────────────────────────────
+# .gitignore — QuantumEnergyOS
+# ──────────────────────────────────────────────────────────────
+ 
+# ── SEGURIDAD CRÍTICA — NUNCA en git ─────────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+secrets/
+secret.json
+credentials.json
+ 
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+ 
+# ── Jupyter ───────────────────────────────────────────────────
+.ipynb_checkpoints/
+*_executed.ipynb
+ 
+# ── Q# / .NET ────────────────────────────────────────────────
+bin/
+obj/
+*.user
+.vs/
+*.suo
+ 
+# ── Resultados de simulación (generados) ─────────────────────
+*.log
+output*.txt
+simulation-results/
+*_results.json
+bandit-results.sarif
+trivy-*.sarif
+pip-audit-results.json
+ 
+# ── Docker ───────────────────────────────────────────────────
+.dockerignore
+ 
+# ── Imágenes generadas por el notebook ───────────────────────
+balanceo_red.png
+fusion_sim.png
+braiding_debug.png
+dashboard_quantum.png
+ 
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+ 
+# ── IDE ──────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.iml
+ 
+# ── Coverage / tests ─────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

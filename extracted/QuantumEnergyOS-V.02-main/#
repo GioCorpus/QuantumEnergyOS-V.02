@@ -1,0 +1,7 @@
+# fn lambda_not_nan() {
+    let lambda: f64 = 1.1056e-52;  // valor real ~Λ/3 ~ 1.1e-52 m⁻²
+    assert!(!lambda.is_nan(), "¡NaN en la constante! El cosmos colapsó");
+    assert!(lambda > 0.0, "Λ negativa? ¿Acaso el universo se encoge?");
+    assert!(lambda < 1e-50, "Demasiado grande, expansión hiper-rápida");
+    println!("Λ chequeada: todo bien, expansión eterna.");
+}

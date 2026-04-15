@@ -1,0 +1,60 @@
+[Unit]
+Description=QuantumEnergyOS API Container (Podman)
+Documentation=https://github.com/GioCorpus/QuantumEnergyOS
+After=network-online.target
+Wants=network-online.target
+Requires=qeos-immutable-setup.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+# Non-root user for security
+User=qeos
+Group=qeos
+
+# Environment
+Environment="PORT=8000"
+Environment="QEOS_ENV=production"
+Environment="PODMAN_SYSTEMD=%n"
+
+# Working directory
+WorkingDirectory=/var/lib/qeos/api
+
+# Logging
+ExecStartPre=/usr/bin/mkdir -p /var/lib/qeos/api /var/log/qeos
+ExecStartPre=/usr/bin/chown -R qeos:qeos /var/lib/qeos /var/log/qeos
+
+# Start Podman container
+ExecStart=/usr/bin/podman run \
+    --name qeos-api \
+    --hostname qeos-api \
+    --uidmap 0:0:1 \
+    --gidmap 0:0:1 \
+    --network host \
+    --read-only=false \
+    --volume /var/lib/qeos/api:/data:z \
+    --volume /var/log/qeos:/var/log:z \
+    --volume /etc/qeos:/etc/qeos:ro \
+    --env-file /etc/qeos/api.env \
+    --security-opt no-new-privileges:true \
+    --cap-drop ALL \
+    --cap-add NET_BIND_SERVICE \
+    localhost/qeos-api:latest
+
+# Health check
+ExecStartPost=/usr/bin/sleep 5
+ExecStartPost=/usr/bin/curl -sf http://localhost:8000/health || /usr/bin/podman kill qeos-api
+
+# Stop
+ExecStop=/usr/bin/podman stop -t 10 qeos-api
+ExecStop=/usr/bin/podman rm -f qeos-api
+
+# Resource limits (prevent DoS)
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+[package]
+name = "photonicq-bridge"
+version = "1.0.0"
+edition = "2021"
+authors = ["Giovanny Corpus Bernal <giovanny.corpus@example.com>"]
+description = "Photonic-Quantum Bridge for QuantumSpaceOS - High-speed quantum-classical communication"
+license = "MIT"
+repository = "https://github.com/giovannycorpus/QuantumSpaceOS"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1.0", features = ["full"] }
+thiserror = "1.0"
+
+[features]
+default = ["space-environment"]
+space-environment = []
+deep-space = []
+leo-orbit = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

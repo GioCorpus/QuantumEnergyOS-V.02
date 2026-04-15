@@ -1,0 +1,230 @@
+"""
+security/validation.py
+──────────────────────
+Validación de entradas para circuitos cuánticos.
+Usa Pydantic v2 para schema estricto y marshmallow como capa adicional.
+
+Protege contra:
+- Circuitos con demasiados qubits (DoS)
+- Parámetros fuera de rango (inyección numérica)
+- Algoritmos no permitidos (ejecución arbitraria)
+- Payloads malformados o demasiado grandes
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# ── Constantes de seguridad ──────────────────────────────────
+MAX_QUBITS         = 32          # Límite duro: previene explosión exponencial de memoria
+MAX_PARAMS         = 64          # Máximo de parámetros por circuito
+MAX_CIRCUIT_DEPTH  = 1000        # Máximo de compuertas
+ALLOWED_ALGORITHMS = frozenset({
+    "BalancearRed",
+    "FusionSim",
+    "BraidingDebug",
+    "QAOA",
+    "VQE",
+    "Grover",
+})
+PARAM_RANGE = (-1e6, 1e6)        # Rango válido de parámetros numéricos
+
+
+# ── Enumeraciones seguras ────────────────────────────────────
+class Algorithm(str, Enum):
+    BALANCEAR_RED   = "BalancearRed"
+    FUSION_SIM      = "FusionSim"
+    BRAIDING_DEBUG  = "BraidingDebug"
+    QAOA            = "QAOA"
+    VQE             = "VQE"
+    GROVER          = "Grover"
+
+
+class SimulatorBackend(str, Enum):
+    LOCAL_AESIMULATOR = "aer_simulator"
+    AZURE_QUANTUM     = "azure_quantum"
+    IBMQ              = "ibmq"
+
+
+# ── Modelos Pydantic ─────────────────────────────────────────
+class QuantumCircuitRequest(BaseModel):
+    """Solicitud de ejecución de circuito cuántico — validación estricta."""
+
+    algorithm:  Algorithm
+    qubits:     int = Field(..., ge=1, le=MAX_QUBITS,
+                            description="Número de qubits (1–32)")
+    parameters: dict[str, float] = Field(
+        default_factory=dict,
+        description="Parámetros del algoritmo (gamma, beta, etc.)"
+    )
+    shots:      int = Field(default=1024, ge=1, le=65536)
+    backend:    SimulatorBackend = SimulatorBackend.LOCAL_AESIMULATOR
+    timestamp:  datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_parameters(cls, v: dict[str, float]) -> dict[str, float]:
+        if len(v) > MAX_PARAMS:
+            raise ValueError(
+                f"Demasiados parámetros: {len(v)} > {MAX_PARAMS}"
+            )
+        lo, hi = PARAM_RANGE
+        for key, val in v.items():
+            # Validar nombre del parámetro (solo alfanumérico + guión bajo)
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', key):
+                raise ValueError(f"Nombre de parámetro inválido: '{key}'")
+            if not (lo <= val <= hi):
+                raise ValueError(
+                    f"Parámetro '{key}' fuera de rango: {val} ∉ [{lo}, {hi}]"
+                )
+        return v
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v: datetime) -> datetime:
+        """Rechazar timestamps con más de 5 minutos de antigüedad (replay attacks)."""
+        now = datetime.now(timezone.utc)
+        delta = abs((now - v).total_seconds())
+        if delta > 300:
+            raise ValueError(
+                f"Timestamp expirado: {delta:.0f}s de diferencia (máx 300s)"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_algorithm_qubit_compat(self) -> "QuantumCircuitRequest":
+        """Validar compatibilidad entre algoritmo y número de qubits."""
+        limits = {
+            Algorithm.BRAIDING_DEBUG: (4, 16),   # Requiere múltiplos de 2
+            Algorithm.FUSION_SIM:     (2, 12),
+            Algorithm.BALANCEAR_RED:  (2, 20),
+        }
+        if self.algorithm in limits:
+            lo, hi = limits[self.algorithm]
+            if not (lo <= self.qubits <= hi):
+                raise ValueError(
+                    f"{self.algorithm} requiere {lo}–{hi} qubits, "
+                    f"recibido: {self.qubits}"
+                )
+            if self.algorithm == Algorithm.BRAIDING_DEBUG and self.qubits % 2 != 0:
+                raise ValueError(
+                    "BraidingDebug requiere número par de qubits (pares de anyones)"
+                )
+        return self
+
+    def circuit_hash(self) -> str:
+        """SHA-256 del circuito para auditoría e idempotencia."""
+        payload = {
+            "algorithm": self.algorithm.value,
+            "qubits": self.qubits,
+            "parameters": self.parameters,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode()
+        ).hexdigest()
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "algorithm": "BalancearRed",
+                "qubits": 4,
+                "parameters": {"gamma": 0.5, "beta": 0.3},
+                "shots": 1024,
+                "backend": "aer_simulator",
+                "timestamp": "2026-03-13T10:00:00Z"
+            }]
+        }
+    }
+
+
+class QuantumCircuitResult(BaseModel):
+    """Resultado de ejecución — incluye hash para auditoría."""
+
+    request_hash: str
+    algorithm:    str
+    qubits:       int
+    shots:        int
+    counts:       dict[str, int]
+    energy:       float | None = None
+    fidelity:     float | None = None
+    timestamp:    datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    backend:      str
+    success:      bool = True
+    error:        str | None = None
+
+    @property
+    def result_hash(self) -> str:
+        """SHA-256 del resultado para integridad de auditoría."""
+        payload = {
+            "request_hash": self.request_hash,
+            "counts": self.counts,
+            "timestamp": self.timestamp.isoformat(),
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode()
+        ).hexdigest()
+
+
+# ── Marshmallow (capa de deserialización adicional) ──────────
+try:
+    from marshmallow import Schema, fields, validate, ValidationError as MarshmallowError
+
+    class QuantumRequestSchema(Schema):
+        """Schema marshmallow para deserialización desde fuentes no confiables."""
+        algorithm  = fields.Str(
+            required=True,
+            validate=validate.OneOf([a.value for a in Algorithm])
+        )
+        qubits     = fields.Int(
+            required=True,
+            validate=validate.Range(min=1, max=MAX_QUBITS)
+        )
+        parameters = fields.Dict(
+            keys=fields.Str(),
+            values=fields.Float(),
+            load_default={}
+        )
+        shots      = fields.Int(
+            load_default=1024,
+            validate=validate.Range(min=1, max=65536)
+        )
+        backend    = fields.Str(
+            load_default="aer_simulator",
+            validate=validate.OneOf([b.value for b in SimulatorBackend])
+        )
+
+    MARSHMALLOW_AVAILABLE = True
+
+except ImportError:
+    MARSHMALLOW_AVAILABLE = False
+    QuantumRequestSchema = None  # type: ignore
+
+
+# ── Función de validación unificada ─────────────────────────
+def validate_circuit_request(data: dict[str, Any]) -> QuantumCircuitRequest:
+    """
+    Punto de entrada único para validar solicitudes de circuitos.
+    Aplica marshmallow primero (si disponible), luego Pydantic.
+    Levanta ValueError con mensaje descriptivo en caso de fallo.
+    """
+    # Capa 1: marshmallow (sanitización de tipos)
+    if MARSHMALLOW_AVAILABLE and QuantumRequestSchema:
+        try:
+            schema = QuantumRequestSchema()
+            data = schema.load(data)
+        except Exception as e:
+            raise ValueError(f"Error de deserialización: {e}") from e
+
+    # Capa 2: Pydantic (validación semántica)
+    return QuantumCircuitRequest(**data)

@@ -1,0 +1,251 @@
+"""
+security/auth.py
+────────────────
+Autenticación JWT + Rate Limiting para la API de QuantumEnergyOS.
+
+Protege contra:
+- Acceso no autorizado a ejecuciones de circuitos
+- Ataques de fuerza bruta (rate limiting por IP y por token)
+- Tokens expirados o manipulados
+- Replay attacks (jti claim + blacklist)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+import uuid
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+from typing import Any, Callable
+
+# PyJWT — pip install PyJWT[crypto]
+try:
+    import jwt
+    JWT_AVAILABLE = True
+except ImportError:
+    JWT_AVAILABLE = False
+    jwt = None  # type: ignore
+
+# ── Configuración (leer de .env — NUNCA hardcodear secretos) ──
+JWT_SECRET_KEY   = os.environ.get("QEOS_JWT_SECRET", "CHANGE_ME_IN_PRODUCTION")
+JWT_ALGORITHM    = "HS256"
+JWT_EXPIRY_HOURS = int(os.environ.get("QEOS_JWT_EXPIRY_HOURS", "24"))
+JWT_ISSUER       = "QuantumEnergyOS"
+JWT_AUDIENCE     = "qeos-api"
+
+# ── Rate limiting ─────────────────────────────────────────────
+RATE_LIMIT_REQUESTS = int(os.environ.get("QEOS_RATE_LIMIT_REQ", "60"))
+RATE_LIMIT_WINDOW   = int(os.environ.get("QEOS_RATE_LIMIT_WIN", "60"))   # segundos
+
+# Advertencia de seguridad en desarrollo
+if JWT_SECRET_KEY == "CHANGE_ME_IN_PRODUCTION":
+    import warnings
+    warnings.warn(
+        "⚠️  JWT_SECRET_KEY no está configurado. "
+        "Define QEOS_JWT_SECRET en .env antes de producción.",
+        stacklevel=1
+    )
+
+
+# ── Token blacklist (en producción: usar Redis) ───────────────
+_token_blacklist: set[str] = set()
+
+# ── Rate limiter en memoria (en producción: usar Redis) ───────
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+# ── JWT ──────────────────────────────────────────────────────
+def create_token(
+    subject: str,
+    roles: list[str] | None = None,
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
+    """
+    Genera un JWT firmado con HS256.
+
+    Args:
+        subject:      Identificador del usuario/servicio.
+        roles:        Lista de roles (e.g., ["read", "execute"]).
+        extra_claims: Claims adicionales opcionales.
+
+    Returns:
+        Token JWT como string.
+    """
+    if not JWT_AVAILABLE:
+        raise RuntimeError("PyJWT no instalado — pip install PyJWT[crypto]")
+
+    now = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "sub":  subject,
+        "iss":  JWT_ISSUER,
+        "aud":  JWT_AUDIENCE,
+        "iat":  now,
+        "exp":  now + timedelta(hours=JWT_EXPIRY_HOURS),
+        "jti":  str(uuid.uuid4()),           # ID único — anti-replay
+        "roles": roles or ["read"],
+    }
+    if extra_claims:
+        payload.update(extra_claims)
+
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def verify_token(token: str) -> dict[str, Any]:
+    """
+    Verifica y decodifica un JWT.
+
+    Raises:
+        ValueError: Si el token es inválido, expirado o está en la blacklist.
+
+    Returns:
+        Payload decodificado.
+    """
+    if not JWT_AVAILABLE:
+        raise RuntimeError("PyJWT no instalado")
+
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
+        )
+    except jwt.ExpiredSignatureError:
+        raise ValueError("Token expirado")
+    except jwt.InvalidTokenError as e:
+        raise ValueError(f"Token inválido: {e}")
+
+    # Verificar blacklist (logout / revocación)
+    jti = payload.get("jti", "")
+    if jti in _token_blacklist:
+        raise ValueError("Token revocado")
+
+    return payload
+
+
+def revoke_token(token: str) -> None:
+    """Agrega el JTI a la blacklist (logout)."""
+    try:
+        payload = verify_token(token)
+        _token_blacklist.add(payload["jti"])
+    except ValueError:
+        pass  # Ya inválido — no hay que hacer nada
+
+
+def require_role(role: str) -> Callable:
+    """
+    Decorador que verifica que el token tenga el rol requerido.
+
+    Uso:
+        @require_role("execute")
+        def run_circuit(token: str, request: dict) -> dict: ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, token: str = "", **kwargs):
+            payload = verify_token(token)
+            roles = payload.get("roles", [])
+            if role not in roles:
+                raise PermissionError(
+                    f"Rol requerido: '{role}' — roles del token: {roles}"
+                )
+            return func(*args, token=token, **kwargs)
+        return wrapper
+    return decorator
+
+
+# ── Rate Limiter ──────────────────────────────────────────────
+class RateLimitExceeded(Exception):
+    """Levantada cuando se supera el límite de requests."""
+    def __init__(self, identifier: str, retry_after: int):
+        self.identifier  = identifier
+        self.retry_after = retry_after
+        super().__init__(
+            f"Rate limit excedido para '{identifier}'. "
+            f"Reintentar en {retry_after}s."
+        )
+
+
+def check_rate_limit(
+    identifier: str,
+    max_requests: int = RATE_LIMIT_REQUESTS,
+    window_seconds: int = RATE_LIMIT_WINDOW,
+) -> None:
+    """
+    Verifica el rate limit para un identificador (IP o sub JWT).
+    Algoritmo: sliding window.
+
+    Raises:
+        RateLimitExceeded: Si se supera el límite.
+    """
+    now    = time.monotonic()
+    cutoff = now - window_seconds
+
+    # Limpiar timestamps fuera de la ventana
+    timestamps = _rate_limit_store[identifier]
+    _rate_limit_store[identifier] = [t for t in timestamps if t > cutoff]
+
+    if len(_rate_limit_store[identifier]) >= max_requests:
+        oldest = min(_rate_limit_store[identifier])
+        retry_after = int(window_seconds - (now - oldest)) + 1
+        raise RateLimitExceeded(identifier, retry_after)
+
+    _rate_limit_store[identifier].append(now)
+
+
+def rate_limit(
+    max_requests: int = RATE_LIMIT_REQUESTS,
+    window_seconds: int = RATE_LIMIT_WINDOW,
+    key_func: Callable | None = None,
+) -> Callable:
+    """
+    Decorador de rate limiting.
+
+    Args:
+        max_requests:   Máximo de requests en la ventana.
+        window_seconds: Tamaño de la ventana en segundos.
+        key_func:       Función que extrae el identificador del primer argumento.
+                        Por defecto: usa el primer argumento como string.
+
+    Uso:
+        @rate_limit(max_requests=10, window_seconds=60)
+        def execute_circuit(client_ip: str, ...) -> dict: ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if key_func:
+                identifier = key_func(*args, **kwargs)
+            elif args:
+                identifier = str(args[0])
+            else:
+                identifier = "global"
+
+            check_rate_limit(identifier, max_requests, window_seconds)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# ── Logging de seguridad ──────────────────────────────────────
+def log_security_event(
+    event_type: str,
+    identifier: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """
+    Registra eventos de seguridad en formato estructurado.
+    En producción: redirigir a SIEM o sistema de logging centralizado.
+    """
+    entry = {
+        "timestamp":  datetime.now(timezone.utc).isoformat(),
+        "event":      event_type,
+        "identifier": hashlib.sha256(identifier.encode()).hexdigest()[:16],
+        "details":    details or {},
+    }
+    # TODO: reemplazar con structlog o logging centralizado
+    print(f"[SECURITY] {entry}")

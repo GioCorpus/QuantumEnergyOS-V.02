@@ -1,0 +1,90 @@
+# ──────────────────────────────────────────────────────────────
+# Dockerfile — QuantumEnergyOS (hardened, producción)
+#
+# Prácticas aplicadas:
+#   ✅ Multi-stage build (imagen final mínima)
+#   ✅ Usuario no-root qeos:1000
+#   ✅ requirements-pinned.txt (versiones exactas, 0 CVEs)
+#   ✅ Sin secretos en imagen — tokens solo via env en runtime
+#   ✅ --read-only + --memory=512m en runtime
+#   ✅ Health check incorporado
+#   ✅ Labels OCI estándar
+# ──────────────────────────────────────────────────────────────
+
+# ── Stage 1: Builder ─────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+COPY requirements-pinned.txt ./
+
+RUN pip install --upgrade pip --no-cache-dir && \
+    pip install --no-cache-dir \
+        -r requirements-pinned.txt \
+        --target /build/packages
+
+# ── Stage 2: Runtime ─────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+LABEL org.opencontainers.image.title="QuantumEnergyOS" \
+      org.opencontainers.image.description="Optimización cuántica de redes eléctricas" \
+      org.opencontainers.image.source="https://github.com/GioCorpus/QuantumEnergyOS" \
+      org.opencontainers.image.licenses="MIT"
+
+# Usuario sin privilegios
+RUN groupadd --gid 1000 qeos && \
+    useradd --uid 1000 --gid 1000 --no-create-home --shell /bin/false qeos
+
+COPY --from=builder /build/packages /usr/local/lib/python3.11/site-packages/
+
+WORKDIR /app
+RUN chown qeos:qeos /app
+
+COPY --chown=qeos:qeos src/        ./src/
+COPY --chown=qeos:qeos security/   ./security/
+COPY --chown=qeos:qeos cloud/      ./cloud/
+COPY --chown=qeos:qeos api/        ./api/
+COPY --chown=qeos:qeos qsharp.json ./
+
+RUN mkdir -p /tmp/qeos /app/logs && \
+    chown -R qeos:qeos /tmp/qeos /app/logs
+
+USER qeos:qeos
+
+# Tokens se inyectan en runtime — NUNCA en la imagen
+ENV QEOS_ENV=production \
+    QEOS_PORT=8000 \
+    QEOS_LOG_LEVEL=INFO \
+    PYTHONPATH=/app
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c \
+        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
+    || exit 1
+
+CMD ["python", "-m", "api.server"]
+
+# ──────────────────────────────────────────────────────────────
+# Producción (modo hardened):
+#
+#   docker run \
+#     --read-only \
+#     --memory=512m --memory-swap=512m \
+#     --cpus=2 \
+#     --security-opt no-new-privileges \
+#     --cap-drop ALL \
+#     --tmpfs /tmp:size=64m,noexec,nosuid \
+#     -e IBM_QUANTUM_TOKEN="$(cat ~/.ibm_token)" \
+#     -e QEOS_JWT_SECRET="$(openssl rand -hex 32)" \
+#     -p 8000:8000 \
+#     quantumenergyos:latest
+#
+# Con Podman (rootless por defecto):
+#   podman run --read-only --memory=512m ...
+# ──────────────────────────────────────────────────────────────

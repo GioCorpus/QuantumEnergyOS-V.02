@@ -1,0 +1,17 @@
+[Unit]
+Description=QuantumEnergyOS Immutable Volume Setup
+Documentation=https://github.com/GioCorpus/QuantumEnergyOS
+DefaultDependencies=no
+After=local-fs.target
+Before=basic.target
+RequiresMountsFor=/var
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/qeos-immutable-setup
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

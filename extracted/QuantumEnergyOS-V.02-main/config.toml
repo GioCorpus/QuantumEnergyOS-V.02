@@ -1,0 +1,108 @@
+# ═══════════════════════════════════════════════════════════════
+#  QuantumEnergyOS — Configuración Cargo Cross-Compilation
+#  Targets:
+#    • x86_64-unknown-none        → Kernel bare-metal (ISO)
+#    • aarch64-unknown-none       → ARM64 bare-metal (M-series via UTM)
+#    • x86_64-unknown-linux-musl  → Userspace Linux estático
+#    • aarch64-apple-darwin       → macOS Apple Silicon nativo
+#    • x86_64-apple-darwin        → macOS Intel nativo
+#    • x86_64-pc-windows-msvc     → Windows 10/11/12
+# ═══════════════════════════════════════════════════════════════
+
+# ── Target por defecto ───────────────────────────────────────
+[build]
+target = "x86_64-unknown-none"
+
+# ── Kernel bare-metal x86_64 ─────────────────────────────────
+[target.x86_64-unknown-none]
+rustflags = [
+    # Linker script del kernel
+    "-C", "link-arg=-Tkernel/kernel.ld",
+    # Sin PIE — el kernel se carga en dirección fija
+    "-C", "relocation-model=static",
+    # Soft float para el kernel (no usar SSE/AVX sin soporte del OS)
+    "-C", "target-feature=-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2",
+    # Optimizar para tamaño — crítico para <900MB ISO
+    "-C", "opt-level=z",
+]
+
+# ── Kernel bare-metal ARM64 (Apple M-series via UTM/QEMU) ────
+[target.aarch64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-Tkernel/kernel-aarch64.ld",
+    "-C", "relocation-model=pic",
+    "-C", "target-feature=+neon",   # NEON para álgebra cuántica en M-series
+    "-C", "opt-level=z",
+]
+
+# ── Userspace Linux estático (musl — sin libc dinámica) ──────
+[target.x86_64-unknown-linux-musl]
+linker   = "x86_64-linux-musl-gcc"
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-C", "opt-level=z",
+    "-C", "lto=fat",
+]
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"
+rustflags = [
+    "-C", "target-feature=+crt-static,+neon,+fp-armv8",
+    "-C", "opt-level=z",
+    "-C", "lto=fat",
+]
+
+# ── macOS Apple Silicon (M1/M2/M3/M4) — NEON nativo ─────────
+[target.aarch64-apple-darwin]
+rustflags = [
+    # NEON/AdvSIMD para álgebra cuántica acelerada en M-series
+    "-C", "target-feature=+neon,+fp-armv8,+sha2,+aes",
+    # Apple M4 soporta AMX — Accelerate Matrix Extension
+    # (automáticamente usado por Accelerate.framework via metal-rs)
+    "-C", "opt-level=3",    # Máximo rendimiento en Apple Silicon
+    "-C", "lto=thin",       # Thin LTO para binarios macOS más pequeños
+]
+
+# ── macOS Intel (x86_64) ─────────────────────────────────────
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "target-feature=+avx2,+aes,+sha",
+    "-C", "opt-level=3",
+    "-C", "lto=thin",
+]
+
+# ── Windows 10/11/12 x64 ─────────────────────────────────────
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-feature=+avx2,+aes",
+    "-C", "opt-level=z",
+    # Subsystem windows: sin consola en producción
+    "-C", "link-arg=/SUBSYSTEM:CONSOLE",
+]
+
+# ── Windows ARM64 (Surface Pro X, etc.) ──────────────────────
+[target.aarch64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-feature=+neon",
+    "-C", "opt-level=z",
+]
+
+# ── Configuración global ──────────────────────────────────────
+[profile.release]
+strip = "symbols"
+panic = "abort"
+
+# ── Alias útiles ─────────────────────────────────────────────
+[alias]
+# Compilar el kernel completo
+kernel      = "build -p qeos-kernel --profile kernel --target x86_64-unknown-none"
+kernel-arm  = "build -p qeos-kernel --profile kernel --target aarch64-unknown-none"
+# Userspace estático
+userspace   = "build --workspace --exclude qeos-kernel --target x86_64-unknown-linux-musl --profile release"
+# macOS nativo
+macos-m     = "build --workspace --exclude qeos-kernel --target aarch64-apple-darwin --profile release"
+macos-intel = "build --workspace --exclude qeos-kernel --target x86_64-apple-darwin --profile release"
+# Windows
+windows     = "build --workspace --exclude qeos-kernel --target x86_64-pc-windows-msvc --profile release"
+# Tests del quantum subsystem (en el host)
+qtest       = "test -p qeos-quantum --target x86_64-unknown-linux-gnu"

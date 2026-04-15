@@ -1,0 +1,28 @@
+# ── QAOA Nuclear Fuel Reload ─────────────────────────────────────
+@app.post("/api/v1/nuclear/fuel-reload")
+def nuclear_fuel_reload():
+    """
+    Optimización de recarga de combustible nuclear usando QAOA.
+    Body JSON:
+        n_posiciones: int (recomendado 37 o menos)
+        n_frescas: int
+        shots, gamma, beta: opcionales
+    """
+    data = request.get_json(silent=True) or    
+    n_posiciones = int(data.get("n_posiciones", 37))
+    n_frescas    = int(data.get("n_frescas", 12))
+    shots        = int(data.get("shots", 1024))
+    gamma        = float(data.get("gamma", 0.8))
+    beta         = float(data.get("beta", 0.4))
+
+    try:
+        resultado = simular_fuel_reload(
+            n_posiciones=n_posiciones,
+            n_frescas=n_frescas,
+            shots=shots,
+            gamma=gamma,
+            beta=beta
+        )
+        return jsonify({"success": True, "data": resultado})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400

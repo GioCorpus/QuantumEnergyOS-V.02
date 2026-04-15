@@ -1,0 +1,48 @@
+# ══════════════════════════════════════════════════════════════════════
+#  archiso/profiledef/packages.x86_64 — QuantumEnergyOS V.02
+#  Paquetes adicionales para soporte de navegadores web
+#  Agregar a tu packages.x86_64 existente
+# ══════════════════════════════════════════════════════════════════════
+
+# ── Navegadores web ───────────────────────────────────────────────────
+firefox
+chromium
+falkon
+# brave-bin  → instalar via AUR en customize_airootfs.sh (no está en repos oficiales)
+
+# ── Hardware acceleration (VA-API + Vulkan) ───────────────────────────
+mesa
+lib32-mesa
+vulkan-intel
+vulkan-radeon
+vulkan-icd-loader
+libva
+libva-mesa-driver
+libva-intel-driver
+intel-media-driver
+libvdpau
+ocl-icd
+
+# ── Codecs multimedia ─────────────────────────────────────────────────
+gstreamer
+gst-plugins-base
+gst-plugins-good
+gst-plugins-bad
+gst-plugins-ugly
+gst-libav
+ffmpeg
+
+# ── Dependencias del browser_cgroup_manager.py ────────────────────────
+python-psutil
+python-requests
+
+# ── Certificados y seguridad TLS ──────────────────────────────────────
+ca-certificates
+ca-certificates-utils
+nss
+
+# ── Fonts para rendering correcto ────────────────────────────────────
+ttf-dejavu
+ttf-liberation
+noto-fonts
+noto-fonts-emoji

@@ -1,0 +1,41 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════════════
+#  QuantumEnergyOS — Init Script
+#  Boot sequence: shell → splash → tinywl → desktop
+#
+#  Desde Mexicali, BC — para el mundo. Kardashev 0→1
+# ═══════════════════════════════════════════════════════════════════════
+
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+
+# Mount essential filesystems
+mount -t proc proc /proc || { echo "Failed to mount /proc"; exec /bin/sh; }
+mount -t sysfs sysfs /sys || { echo "Failed to mount /sys"; exec /bin/sh; }
+mount -t devtmpfs devtmpfs /dev || { echo "Failed to mount /dev"; exec /bin/sh; }
+mount -t tmpfs tmpfs /tmp || { echo "Failed to mount /tmp"; exec /bin/sh; }
+mount -t tmpfs tmpfs /run || { echo "Failed to mount /run"; exec /bin/sh; }
+
+# Create necessary directories
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /dev/shm
+
+# Set up console
+echo "QuantumEnergyOS — Iniciando..." > /dev/console
+
+# Show splash screen
+/usr/bin/quantum-splash
+
+# Start energy daemon in background
+/usr/bin/quantum-energy-daemon &
+
+# Wait a moment for daemon to start
+sleep 2
+
+# Start compositor with terminal
+echo "Iniciando compositor Wayland..." > /dev/console
+/usr/bin/quantum-compositor -s /bin/sh
+
+# If compositor exits, drop to shell
+echo "Compositor terminado. Shell disponible." > /dev/console
+exec /bin/sh

@@ -1,0 +1,58 @@
+{
+  "productName": "QuantumEnergyOS",
+  "version": "1.0.0",
+  "identifier": "com.giocorpus.quantumenergyos",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl":       "http://localhost:1420",
+    "beforeDevCommand":   "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title":          "⚡ QuantumEnergyOS",
+        "width":          390,
+        "height":         844,
+        "resizable":      true,
+        "fullscreen":     false,
+        "decorations":    true,
+        "transparent":    false,
+        "theme":          "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.met.no https://services.swpc.noaa.gov"
+    }
+  },
+  "bundle": {
+    "active":      true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category":    "Utility",
+    "shortDescription": "Quantum energy grid optimizer",
+    "longDescription": "QuantumEnergyOS optimiza redes eléctricas usando algoritmos cuánticos (QAOA) y el Cuarzo 4D. Desde Mexicali, BC — para el mundo entero.",
+    "targets":     "all",
+    "android": {
+      "minSdkVersion": 24,
+      "features": ["android.hardware.sensor.accelerometer"]
+    },
+    "iOS": {
+      "minimumSystemVersion": "16.0"
+    }
+  },
+  "plugins": {
+    "sql": {
+      "preloadBindings": false
+    },
+    "notification": {
+      "permission": true
+    }
+  }
+}

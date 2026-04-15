@@ -1,0 +1,33 @@
+{
+  "date": "2025-07-15",
+  "city": "Mexicali",
+  "peakDemand": 2480,
+  "peakHour": 17,
+  "temperature": 47,
+  "hourly": [
+    {"hour": 0, "demand": 1450, "temp": 32},
+    {"hour": 1, "demand": 1320, "temp": 30},
+    {"hour": 2, "demand": 1250, "temp": 29},
+    {"hour": 3, "demand": 1220, "temp": 28},
+    {"hour": 4, "demand": 1280, "temp": 28},
+    {"hour": 5, "demand": 1420, "temp": 29},
+    {"hour": 6, "demand": 1680, "temp": 31},
+    {"hour": 7, "demand": 1850, "temp": 34},
+    {"hour": 8, "demand": 1980, "temp": 37},
+    {"hour": 9, "demand": 2100, "temp": 40},
+    {"hour": 10, "demand": 2220, "temp": 43},
+    {"hour": 11, "demand": 2310, "temp": 45},
+    {"hour": 12, "demand": 2380, "temp": 46},
+    {"hour": 13, "demand": 2420, "temp": 47},
+    {"hour": 14, "demand": 2450, "temp": 48},
+    {"hour": 15, "demand": 2470, "temp": 47},
+    {"hour": 16, "demand": 2480, "temp": 46},
+    {"hour": 17, "demand": 2460, "temp": 44},
+    {"hour": 18, "demand": 2390, "temp": 41},
+    {"hour": 19, "demand": 2250, "temp": 38},
+    {"hour": 20, "demand": 2050, "temp": 36},
+    {"hour": 21, "demand": 1850, "temp": 34},
+    {"hour": 22, "demand": 1680, "temp": 33},
+    {"hour": 23, "demand": 1520, "temp": 32}
+  ]
+}

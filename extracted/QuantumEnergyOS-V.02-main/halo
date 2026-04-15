@@ -1,0 +1,6 @@
+# fn halo_not_empty() {
+    let dm = DarkMatterSimulator::new();
+    let borrowed = dm.lend_halo();
+    assert!(*borrowed > 0.0, "¡Halo vacío! Las galaxias se desintegran");
+    assert!(!borrowed.is_nan(), "NaN en dark matter? El universo bugueado");
+}
