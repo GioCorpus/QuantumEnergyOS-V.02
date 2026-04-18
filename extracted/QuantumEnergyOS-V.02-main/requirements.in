@@ -1,2 +1,0 @@
-pip-audit -r requirements-pinned.txt
-pip install --dry-run -r requirements-pinned.txt
