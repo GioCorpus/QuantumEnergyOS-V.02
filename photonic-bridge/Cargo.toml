@@ -1,0 +1,10 @@
+[package]
+name = "photonic-bridge"
+version = "0.2.0"
+edition = "2021"
+authors = ["Giovanny Anthony Corpus Bernal <github.com/GioCorpus>"]
+description = "Photonic Bridge — Vulkan/display bridge for QuantumEnergyOS"
+license = "MIT"
+
+[dependencies]
+ash = "0.37"

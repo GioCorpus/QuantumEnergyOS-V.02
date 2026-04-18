@@ -331,11 +331,11 @@ def simular_fuel_reload(n_posiciones: int = 37,
     # Simulación del patrón óptimo
     patron = [0] * n_posiciones
     for i in range(n_frescas):
-        patron = 0          # 0 = fresca
+        patron[i] = 0          # 0 = fresca
     for i in range(n_frescas, n_frescas+18):
-        patron = 1          # 1 = quemada 1 vez
+        patron[i] = 1          # 1 = quemada 1 vez
     for i in range(n_frescas+18, n_posiciones):
-        patron = 2          # 2 = quemada 2 veces
+        patron[i] = 2          # 2 = quemada 2 veces
     
     random.shuffle(patron)     # pequeño ruido para simular optimización
 

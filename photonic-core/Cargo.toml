@@ -1,0 +1,10 @@
+[package]
+name = "photonic-core"
+version = "0.2.0"
+edition = "2021"
+authors = ["Giovanny Anthony Corpus Bernal <github.com/GioCorpus>"]
+description = "Photonic Core — Quantum components for QuantumEnergyOS"
+license = "MIT"
+
+[dependencies]
+num-complex = "0.4"
