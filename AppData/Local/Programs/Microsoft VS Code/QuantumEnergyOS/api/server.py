@@ -15,6 +15,13 @@ from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional
 import math
 
+try:
+    from climate_orchestrator import ClimateIngestion, QuantumClimateOptimizer
+    from climate_orchestrator.models import RiskLevel, NodeState
+    CLIMATE_ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    CLIMATE_ORCHESTRATOR_AVAILABLE = False
+
 app = Flask(__name__, template_folder='../web-dashboard/public', static_folder='../web-dashboard/public/static')
 CORS(app)
 
@@ -48,6 +55,14 @@ quantum_state = {
 }
 
 historical_load = []
+
+climate_orchestrator = None
+climate_optimizer = None
+
+if CLIMATE_ORCHESTRATOR_AVAILABLE:
+    climate_orchestrator = ClimateIngestion()
+    climate_optimizer = QuantumClimateOptimizer(temp_threshold=45.0)
+    climate_orchestrator.start_polling()
 
 def update_energy_metrics():
     global energy_data, historical_load, quantum_state
@@ -185,6 +200,67 @@ def get_history():
         'timestamp': datetime.now().isoformat()
     })
 
+@app.route('/api/climate/status')
+def get_climate_status():
+    if not CLIMATE_ORCHESTRATOR_AVAILABLE:
+        return jsonify({'error': 'Climate Orchestrator not available'}), 503
+    
+    climate_data = climate_orchestrator.get_current_climate()
+    grid_nodes = climate_orchestrator.get_grid_nodes()
+    risk = climate_optimizer.assess_risk(climate_data, grid_nodes)
+    
+    return jsonify({
+        'temperature': climate_data.temperature,
+        'humidity': climate_data.humidity,
+        'solar_radiation': climate_data.solar_radiation,
+        'wind_speed': climate_data.wind_speed,
+        'risk_score': risk.risk_score,
+        'risk_level': risk.risk_level.value,
+        'affected_nodes': risk.affected_nodes,
+        'recommended_actions': risk.recommended_actions,
+        'predicted_peak_temp': risk.predicted_peak_temp,
+        'heat_wave_status': climate_orchestrator.get_mexicali_heat_wave_status(),
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/climate/optimize', methods=['POST'])
+def climate_optimize():
+    if not CLIMATE_ORCHESTRATOR_AVAILABLE:
+        return jsonify({'error': 'Climate Orchestrator not available'}), 503
+    
+    climate_data = climate_orchestrator.get_current_climate()
+    grid_nodes = climate_orchestrator.get_grid_nodes()
+    result = climate_optimizer.optimize_grid(climate_data, grid_nodes)
+    
+    return jsonify({
+        'optimal_states': result.optimal_states,
+        'energy_savings_kw': result.energy_savings,
+        'risk_reduction_percent': result.risk_reduction,
+        'quantum_solution_time_ms': result.quantum_solution_time_ms,
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/climate/nodes')
+def get_climate_nodes():
+    if not CLIMATE_ORCHESTRATOR_AVAILABLE:
+        return jsonify({'error': 'Climate Orchestrator not available'}), 503
+    
+    nodes = climate_orchestrator.get_grid_nodes()
+    return jsonify({
+        'nodes': [
+            {
+                'id': n.id,
+                'sector': n.sector,
+                'current_load': n.current_load,
+                'capacity': n.capacity,
+                'temperature': n.temperature,
+                'state': n.state.value
+            }
+            for n in nodes
+        ],
+        'timestamp': datetime.now().isoformat()
+    })
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy', 'service': 'quantum-energy-api'})
@@ -202,6 +278,10 @@ if __name__ == '__main__':
     print("  • GET /api/quantum/simulation - Quantum simulation")
     print("  • GET /api/alerts    - System alerts")
     print("  • GET /api/history   - Historical load data")
+    if CLIMATE_ORCHESTRATOR_AVAILABLE:
+        print("  • GET /api/climate/status   - Climate orchestrator status")
+        print("  • GET /api/climate/optimize - Quantum climate optimization")
+        print("  • GET /api/climate/nodes    - Grid node states")
     print("  • GET /health        - Health check")
     print()
     
