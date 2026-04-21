@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -26,6 +27,21 @@ from core import (
     simular_fusion,
     simular_braiding,
 )
+
+# Climate Orchestrator
+try:
+    from climate_orchestrator import (
+        ClimateOrchestrator,
+        ClimateData,
+        RiskLevel,
+        EventType,
+        Prediction,
+        Action,
+        OrchestratorResult,
+    )
+    CLIMATE_AVAILABLE = True
+except ImportError:
+    CLIMATE_AVAILABLE = False
 
 # IBM Qiskit (opcional — requiere IBM_QUANTUM_TOKEN)
 try:
@@ -48,6 +64,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("qeos.api")
 
+# ── Configuración Climate Orchestrator ───────────────────────────────────
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+QEOS_LOCATION       = os.getenv("QEOS_LOCATION", "Mexicali, Baja California, MX")
+USE_RUST_BRIDGE     = os.getenv("USE_RUST_BRIDGE", "false").lower() == "true"
+CLIMATE_DRY_RUN     = os.getenv("CLIMATE_DRY_RUN", "true").lower() == "true"
+CLIMATE_MONITOR_ENABLED = os.getenv("CLIMATE_MONITOR_ENABLED", "false").lower() == "true"
+MONITOR_INTERVAL_SEC   = int(os.getenv("MONITOR_INTERVAL_SEC", "300"))
+
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000", "http://localhost:1420", "*"])
 
@@ -63,6 +87,12 @@ _system_state = {
     "location":       "Mexicali, Baja California, México",
     "mission":        "Nunca más apagones en Mexicali",
 }
+
+# Climate Orchestrator global (lazy init)
+_climate_orchestrator: Any = None
+_climate_monitor_thread: Any = None
+_climate_monitor_stop: Any = None
+_last_climate_alert: dict = {}
 
 _t_start = time.monotonic()
 
@@ -103,6 +133,21 @@ def health():
 
 @app.get("/api/v1/status")
 def status():
+    climate_info = {}
+    if CLIMATE_AVAILABLE:
+        orchestrator = get_climate_orchestrator()
+        climate_info = {
+            "climate_orchestrator": {
+                "available": True,
+                "dry_run": CLIMATE_DRY_RUN,
+                "openweather_configured": bool(OPENWEATHER_API_KEY),
+                "location": QEOS_LOCATION,
+                "monitor_enabled": CLIMATE_MONITOR_ENABLED,
+            }
+        }
+    else:
+        climate_info = {"climate_orchestrator": {"available": False, "reason": "Módulo no instalado"}}
+
     return jsonify({
         **_system_state,
         "backends": {
@@ -111,6 +156,7 @@ def status():
             "qiskit_aer":   True,
             "photonic_sim": True,
         },
+        **climate_info,
     })
 
 # ── Dashboard energético en tiempo real ──────────────────────────────
@@ -460,6 +506,159 @@ def solar_forecast():
         "alert_message":    f"Actividad solar Kp={kp} detectada cerca de Mexicali",
     })
 
+# ── Climate Orchestrator ────────────────────────────────────────────────────
+
+@app.post("/api/v1/climate/analyze")
+def climate_analyze():
+    """
+    Ejecuta análisis climático integral y devuelve recomendaciones JSON.
+
+    Body (opcional):
+        location: str  (por defecto QEOS_LOCATION)
+        dry_run:  bool (sobrescribe configuración global)
+    """
+    if not CLIMATE_AVAILABLE:
+        return jsonify({"success": False, "error": "Climate Orchestrator no disponible"}), 503
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location", QEOS_LOCATION)
+    dry_run_override = data.get("dry_run")
+    orchestrator = get_climate_orchestrator()
+    if not orchestrator:
+        return jsonify({"success": False, "error": "No se pudo inicializar orquestador"}), 500
+
+    # Permitir sobrescribir dry_run por llamada
+    if dry_run_override is not None:
+        orchestrator.dry_run = bool(dry_run_override)
+
+    try:
+        result = orchestrator.analyze(location=location)
+        return jsonify({"success": True, "data": json.loads(result.to_json())})
+    except Exception as e:
+        log.exception("Error en climate analyze")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.get("/api/v1/climate/status")
+def climate_status():
+    """Estado y configuración del Climate Orchestrator."""
+    info = {
+        "available": CLIMATE_AVAILABLE,
+        "openweather_configured": bool(OPENWEATHER_API_KEY),
+        "location": QEOS_LOCATION,
+        "dry_run_default": CLIMATE_DRY_RUN,
+        "monitor_enabled": CLIMATE_MONITOR_ENABLED,
+        "monitor_interval_sec": MONITOR_INTERVAL_SEC,
+    }
+    if CLIMATE_AVAILABLE:
+        orch = get_climate_orchestrator()
+        if orch:
+            info["actions_available"] = [a.id for a in orch.registry.list()]
+    return jsonify(info)
+
+@app.post("/api/v1/climate/actions/<action_id>/execute")
+def climate_execute_action(action_id: str):
+    """Ejecuta una acción individual."""
+    if not CLIMATE_AVAILABLE:
+        return jsonify({"success": False, "error": "Climate Orchestrator no disponible"}), 503
+
+    data = request.get_json(silent=True) or {}
+    dry_run = data.get("dry_run", CLIMATE_DRY_RUN)
+
+    orchestrator = get_climate_orchestrator()
+    if not orchestrator:
+        return jsonify({"success": False, "error": "Orquestador no inicializado"}), 500
+
+    result = orchestrator.execute_action(action_id, dry_run=dry_run)
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+@app.get("/api/v1/climate/autocycle")
+def climate_autocycle():
+    """
+    Ciclo autónomo completo: fetch weather → evaluate → recommend.
+    No ejecuta acciones (dry_run consultivo).
+    """
+    if not CLIMATE_AVAILABLE:
+        return jsonify({"success": False, "error": "Climate Orchestrator no disponible"}), 503
+
+    orchestrator = get_climate_orchestrator()
+    if not orchestrator:
+        return jsonify({"success": False, "error": "Orquestador no inicializado"}), 500
+
+    # Forzar dry_run para autocycle (solo recomendaciones)
+    original_dry = orchestrator.dry_run
+    orchestrator.dry_run = True
+    try:
+        result = orchestrator.analyze(location=QEOS_LOCATION)
+        payload = json.loads(result.to_json())
+        payload["note"] = "Autocycle completado — acciones en modo consultivo"
+        return jsonify({"success": True, "data": payload})
+    finally:
+        orchestrator.dry_run = original_dry
+
+# ── Alerta de apagón / eventos externos ───────────────────────────────────
+
+@app.post("/api/alert")
+def api_alert():
+    """
+    Recibe alertas externas (ej. detector_apagones) y dispara respuesta climática.
+    Si la severidad es alta, ejecuta acciones críticas automáticamente.
+    """
+    alert = request.get_json(silent=True) or {}
+    alert_type = alert.get("type", "unknown")
+    severity   = alert.get("severity", "low").lower()
+    location   = alert.get("location", QEOS_LOCATION)
+
+    log.info("Alerta recibida: type=%s severity=%s location=%s", alert_type, severity, location)
+
+    if not CLIMATE_AVAILABLE:
+        log.warning("Climate Orchestrator no disponible — no se puede procesar alerta")
+        return jsonify({"received": True, "actions_taken": []}), 202
+
+    # Solo procesamos alertas de apagón por ahora
+    if alert_type not in ("power_outage", "blackout", "grid_failure"):
+        return jsonify({"received": True, "message": "Alerta registrada (sin acción automatizada)"}), 202
+
+    # Ejecutar análisis climático de emergencia
+    orchestrator = get_climate_orchestrator()
+    if not orchestrator:
+        return jsonify({"received": True, "error": "Orquestador no init"}), 500
+
+    # Forzar dry_run=False solo si severity es high/critical y no estamos en modo desarrollo
+    effective_dry_run = CLIMATE_DRY_RUN or (severity not in ("high", "critical"))
+    orchestrator.dry_run = effective_dry_run
+
+    try:
+        result = orchestrator.analyze(location=location)
+        actions_taken = []
+
+        # Si riesgo alto/crítico, ejecutar automáticamente las acciones críticas
+        if result.risk_level in ("high", "critical"):
+            critical_ids = [
+                a.id for a in result.actions
+                if a.impact in ("alto", "crítico")
+            ]
+            if critical_ids:
+                exec_results = orchestrator.execute_all(
+                    [a for a in result.actions if a.id in critical_ids],
+                    dry_run=orchestrator.dry_run,
+                )
+                actions_taken = exec_results.get("results", [])
+                log.warning("Acciones de emergencia ejecutadas: %s", critical_ids)
+        else:
+            log.info("Alerta procesada — riesgo %s, no se ejecutan acciones automáticas", result.risk_level)
+
+        return jsonify({
+            "received": True,
+            "risk_level": result.risk_level,
+            "summary": result.summary,
+            "actions_taken": actions_taken,
+            "dry_run": orchestrator.dry_run,
+        }), 200
+    except Exception as e:
+        log.exception("Error procesando alerta")
+        return jsonify({"received": True, "error": str(e)}), 500
+
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def get_qiskit_version() -> str:
@@ -468,6 +667,51 @@ def get_qiskit_version() -> str:
         return qiskit.__version__
     except ImportError:
         return "no instalado"
+
+# ── Climate Orchestrator helpers ──────────────────────────────────────────
+
+def get_climate_orchestrator() -> ClimateOrchestrator | None:
+    """Obtiene la instancia singleton del orquestador climático."""
+    global _climate_orchestrator
+    if not CLIMATE_AVAILABLE:
+        return None
+    if _climate_orchestrator is None:
+        _climate_orchestrator = ClimateOrchestrator(dry_run=CLIMATE_DRY_RUN)
+    return _climate_orchestrator
+
+def _climate_monitor_loop() -> None:
+    """Bucle de monitoreo automático que se ejecuta en hilo separado."""
+    log.info("Climate monitor thread iniciado (intervalo=%ds)", MONITOR_INTERVAL_SEC)
+    while not _climate_monitor_stop.is_set():
+        try:
+            orchestrator = get_climate_orchestrator()
+            if orchestrator:
+                result = orchestrator.analyze(location=QEOS_LOCATION)
+                if result.risk_level in ("high", "critical"):
+                    # En producción: enviar WebSocket, email, Telegram
+                    log.warning(
+                        "⚠️ Climate alert: %s — %s",
+                        result.risk_level.upper(),
+                        result.summary[:120],
+                    )
+                    _last_climate_alert.update(result.to_dict())
+        except Exception as e:
+            log.error("Error en climate monitor: %s", e)
+        _climate_monitor_stop.wait(MONITOR_INTERVAL_SEC)
+    log.info("Climate monitor thread detenido")
+
+def start_climate_monitor() -> None:
+    """Inicia el hilo de monitoreo climático si está habilitado."""
+    global _climate_monitor_thread, _climate_monitor_stop
+    if not CLIMATE_MONITOR_ENABLED or not CLIMATE_AVAILABLE:
+        return
+    _climate_monitor_stop = threading.Event()
+    _climate_monitor_thread = threading.Thread(
+        target=_climate_monitor_loop,
+        name="ClimateMonitor",
+        daemon=True,
+    )
+    _climate_monitor_thread.start()
 
 # ── Entry point ───────────────────────────────────────────────────────
 
@@ -479,5 +723,9 @@ if __name__ == "__main__":
     log.info(f"   IBM Qiskit:  {'✓' if IBM_AVAILABLE else '✗ (pip install qiskit-ibm-runtime)'}")
     log.info(f"   Microsoft Q#: {'✓' if QSHARP_AVAILABLE else '✗ (pip install qsharp)'}")
     log.info(f"   Misión: Nunca más apagones en Mexicali")
+
+    # Iniciar monitor climático en background si está habilitado
+    if CLIMATE_MONITOR_ENABLED:
+        start_climate_monitor()
 
     app.run(host="0.0.0.0", port=port, debug=debug)
